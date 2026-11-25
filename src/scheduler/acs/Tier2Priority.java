@@ -1,4 +1,3 @@
-
 package scheduler.acs;
 
 import java.util.ArrayList;
@@ -54,18 +53,25 @@ public class Tier2Priority {
         }
 
         processes.sort(
-            Comparator
-                .comparingInt((Process p) ->
-                    agingPolicy.getEffectivePriority(p, currentTime))
-                .thenComparingInt(Process::getArrivalTime)
-                .thenComparing(Process::getName)
-        );
+                Comparator
+                        .comparingInt((Process p) -> agingPolicy.getEffectivePriority(p, currentTime))
+                        .thenComparingInt(Process::getArrivalTime)
+                        .thenComparing(Process::getName));
 
         return processes.remove(0);
     }
 
     /**
-     * Returns a sorted copy of Tier 2 processes.
+     * Returns a copy of the Tier 2 processes in the order they entered Tier 2
+     * (earliest first; ties by arrival time, then name). This is the order the
+     * assignment
+     * PDF uses when it shows Tier 2. The process that is actually dispatched is
+     * still the
+     * one with the best effective priority (see pollNext), so scheduling is
+     * unchanged.
+     *
+     * currentTime is kept only so the signature stays the same; this order does not
+     * need it.
      * Does not modify the original queue.
      */
     public List<Process> getProcesses(int currentTime) {
@@ -73,12 +79,10 @@ public class Tier2Priority {
         List<Process> result = new ArrayList<>(processes);
 
         result.sort(
-            Comparator
-                .comparingInt((Process p) ->
-                    agingPolicy.getEffectivePriority(p, currentTime))
-                .thenComparingInt(Process::getArrivalTime)
-                .thenComparing(Process::getName)
-        );
+                Comparator
+                        .comparingInt(Process::getTier2EntryTime)
+                        .thenComparingInt(Process::getArrivalTime)
+                        .thenComparing(Process::getName));
 
         return result;
     }
