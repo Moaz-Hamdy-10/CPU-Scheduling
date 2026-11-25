@@ -1,4 +1,3 @@
-
 package scheduler.acs;
 
 import java.util.ArrayList;
@@ -63,8 +62,14 @@ public class ACSScheduler implements Scheduler {
         int quantumRemaining = 0;
         int contextSwitchRemaining = 0;
 
+        // Event text of the ongoing context switch (same text on every CS tick).
+        String contextSwitchEvent = "";
+
         // Last process that actually used the CPU.
         String lastProcessName = null;
+
+        // True if that last process finished (nothing to save in the switch).
+        boolean lastProcessFinished = false;
 
         int quantum = config.getQuantum();
         int cs = config.getContextSwitch();
@@ -93,41 +98,12 @@ public class ACSScheduler implements Scheduler {
                     captureQueues(tier1, tier2, agingPolicy, currentTime);
 
             // ----------------------------------
-            // 3. Continue an ongoing context switch.
+            // 3. Select a process if CPU is free.
             // ----------------------------------
 
-            if (contextSwitchTarget != null) {
-
-                snapshots.add(new Snapshot(
-                        currentTime,
-                        Snapshot.CpuState.CONTEXT_SWITCH,
-                        null,
-                        "Context switching to "
-                                + contextSwitchTarget.getName(),
-                        queueViews
-                ));
-
-                contextSwitchRemaining--;
-                currentTime++;
-
-                if (contextSwitchRemaining == 0) {
-
-                    runningProcess = contextSwitchTarget;
-                    contextSwitchTarget = null;
-
-                    if (runningProcess.getTier() == Tier.TIER1) {
-                        quantumRemaining = quantum;
-                    }
-                }
-
-                continue;
-            }
-
-            // ----------------------------------
-            // 4. Select a process if CPU is free.
-            // ----------------------------------
-
-            if (runningProcess == null) {
+            // (Skipped while a context switch is in progress:
+            // the target was already selected.)
+            if (contextSwitchTarget == null && runningProcess == null) {
 
                 boolean selectedFromTier1 = false;
 
@@ -168,9 +144,10 @@ public class ACSScheduler implements Scheduler {
                 }
 
                 // ----------------------------------
-                // 5. Account for context switching.
+                // 4. Account for context switching.
                 // ----------------------------------
 
+                // Only prepares the switch; the ticks are done in step 5.
                 if (lastProcessName != null
                         && !lastProcessName.equals(
                                 runningProcess.getName())
@@ -180,32 +157,48 @@ public class ACSScheduler implements Scheduler {
 
                     contextSwitchRemaining = cs;
 
+                    // Same format as SJFScheduler and the PDF:
+                    // "Context switch saves P1 and loads P2"
+                    // or "Context switch loads P2" if P1 already finished.
+                    contextSwitchEvent = lastProcessFinished
+                            ? "Context switch loads "
+                                    + contextSwitchTarget.getName()
+                            : "Context switch saves " + lastProcessName
+                                    + " and loads "
+                                    + contextSwitchTarget.getName();
+
                     runningProcess = null;
-
-                    snapshots.add(new Snapshot(
-                            currentTime,
-                            Snapshot.CpuState.CONTEXT_SWITCH,
-                            null,
-                            "Context switch to "
-                                    + contextSwitchTarget.getName(),
-                            queueViews
-                    ));
-
-                    contextSwitchRemaining--;
-                    currentTime++;
-
-                    if (contextSwitchRemaining == 0) {
-
-                        runningProcess = contextSwitchTarget;
-                        contextSwitchTarget = null;
-
-                        if (runningProcess.getTier() == Tier.TIER1) {
-                            quantumRemaining = quantum;
-                        }
-                    }
-
-                    continue;
                 }
+            }
+
+            // ----------------------------------
+            // 5. Run one tick of the context switch (if any).
+            // ----------------------------------
+
+            if (contextSwitchTarget != null) {
+
+                snapshots.add(new Snapshot(
+                        currentTime,
+                        Snapshot.CpuState.CONTEXT_SWITCH,
+                        null,
+                        contextSwitchEvent,
+                        queueViews
+                ));
+
+                contextSwitchRemaining--;
+                currentTime++;
+
+                if (contextSwitchRemaining == 0) {
+
+                    runningProcess = contextSwitchTarget;
+                    contextSwitchTarget = null;
+
+                    if (runningProcess.getTier() == Tier.TIER1) {
+                        quantumRemaining = quantum;
+                    }
+                }
+
+                continue;
             }
 
             // ----------------------------------
@@ -237,6 +230,7 @@ public class ACSScheduler implements Scheduler {
                 runningProcess.markFinished(currentTime);
 
                 lastProcessName = runningProcess.getName();
+                lastProcessFinished = true;
 
                 runningProcess = null;
                 quantumRemaining = 0;
@@ -268,6 +262,7 @@ public class ACSScheduler implements Scheduler {
                     demotedProcesses.add(demoted.getName());
 
                     lastProcessName = demoted.getName();
+                    lastProcessFinished = false;
 
                     runningProcess = null;
                 }
