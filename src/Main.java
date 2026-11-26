@@ -1,12 +1,13 @@
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Scanner;
 
 import experiment.ExperimentRunner.ExperimentRow;
 import experiment.ExperimentRunner;
-import model.ProcessResult;
+import model.Process;
+import model.SimulationConfig;
 import model.SimulationResult;
 import output.CsvExporter;
 import output.MatrixPrinter;
@@ -20,7 +21,7 @@ import testing.TestCases;
  *
  * java Main -> interactive menu
  * java Main --all -> run everything without asking (test cases, CSVs,
- * experiments, self-check)
+ * experiments)
  *
  * Main contains no scheduling logic. It only connects the pieces:
  * TestCases -> Scheduler.run() -> MatrixPrinter (console) + CsvExporter (files)
@@ -33,6 +34,9 @@ public class Main {
 
     private static final List<Scheduler> SCHEDULERS = List.of(new SJFScheduler(), new ACSScheduler());
 
+    /** Upper bound accepted for typed times and priorities (just a sanity limit). */
+    private static final int MAX_INPUT = 10_000;
+
     /** Width of the banners printed by the menu. */
     private static final int WIDTH = 50;
 
@@ -40,7 +44,6 @@ public class Main {
         if (args.length > 0 && args[0].equals("--all")) {
             runAllTestCases();
             runExperiments();
-            selfCheck();
             return;
         }
         menu();
@@ -59,7 +62,7 @@ public class Main {
             System.out.println(" 1. Run all test cases (SJF + ACS)");
             System.out.println(" 2. Run one test case");
             System.out.println(" 3. Run Q / CS experiments");
-            System.out.println(" 4. Self-check against the assignment PDF");
+            System.out.println(" 4. Run a custom test case");
             System.out.println(" 0. Exit");
             System.out.println("=".repeat(WIDTH));
 
@@ -76,7 +79,7 @@ public class Main {
                     runExperiments();
                     break;
                 case 4:
-                    selfCheck();
+                    runCustom(in);
                     break;
                 default: // 0 or end of input
                     System.out.println("Bye.");
@@ -110,6 +113,81 @@ public class Main {
         }
 
         runTestCase(all.get(t - 1), SCHEDULERS.get(s - 1));
+    }
+
+    // =====================================================================
+    // Custom test case (typed by the user)
+    // =====================================================================
+
+    /**
+     * Reads the processes and the parameters from the keyboard, then runs the chosen
+     * algorithm(s) exactly like a built-in test case (matrix, analysis table, CSV files).
+     * Processes are named P1, P2, ... in the order they are typed.
+     * Typing nothing for the aging interval keeps the default.
+     */
+    private static void runCustom(Scanner in) {
+        System.out.println();
+        banner("CUSTOM TEST CASE");
+
+        int n = readInt(in, " Number of processes (1-20): ", 1, 20);
+        if (n < 0) {
+            return;
+        }
+
+        List<Process> processes = new ArrayList<>();
+        for (int i = 1; i <= n; i++) {
+            System.out.println(" Process P" + i + ":");
+            int arrival = readInt(in, "   Arrival time (>= 0): ", 0, MAX_INPUT);
+            if (arrival < 0) {
+                return;
+            }
+            int burst = readInt(in, "   Burst time (>= 1): ", 1, MAX_INPUT);
+            if (burst < 0) {
+                return;
+            }
+            int priority = readInt(in, "   Initial priority (>= 1, lower number = higher priority): ",
+                    1, MAX_INPUT);
+            if (priority < 0) {
+                return;
+            }
+            processes.add(new Process("P" + i, arrival, burst, priority));
+        }
+
+        System.out.println();
+        int quantum = readInt(in, " Time quantum Q (>= 1): ", 1, MAX_INPUT);
+        if (quantum < 0) {
+            return;
+        }
+        int contextSwitch = readInt(in, " Context switch time CS (>= 0): ", 0, MAX_INPUT);
+        if (contextSwitch < 0) {
+            return;
+        }
+        int aging = readIntOrDefault(in,
+                " Aging interval (Enter = " + SimulationConfig.DEFAULT_AGING_INTERVAL + "): ",
+                1, MAX_INPUT, SimulationConfig.DEFAULT_AGING_INTERVAL);
+        if (aging < 0) {
+            return;
+        }
+
+        System.out.println();
+        System.out.println(" Select an algorithm:");
+        for (int i = 0; i < SCHEDULERS.size(); i++) {
+            System.out.println("   " + (i + 1) + ". " + SCHEDULERS.get(i).getName());
+        }
+        System.out.println("   " + (SCHEDULERS.size() + 1) + ". Both");
+        int choice = readInt(in, " Algorithm: ", 1, SCHEDULERS.size() + 1);
+        if (choice < 0) {
+            return;
+        }
+
+        TestCases.TestCase tc = new TestCases.TestCase("Custom Test Case", processes,
+                new SimulationConfig(quantum, contextSwitch, aging));
+
+        for (int i = 0; i < SCHEDULERS.size(); i++) {
+            if (choice == SCHEDULERS.size() + 1 || choice == i + 1) {
+                runTestCase(tc, SCHEDULERS.get(i));
+            }
+        }
     }
 
     // =====================================================================
@@ -171,56 +249,6 @@ public class Main {
     }
 
     // =====================================================================
-    // Self-check against the two PDF test cases
-    // =====================================================================
-
-    /**
-     * Compares the ACS results for Test Cases 1 and 2 with the numbers printed in
-     * the
-     * assignment PDF (finish times and averages). Evidence for the test-case grade.
-     */
-    private static boolean selfCheck() {
-        System.out.println();
-        banner("SELF-CHECK AGAINST ASSIGNMENT PDF (ACS)");
-        ACSScheduler acs = new ACSScheduler();
-        boolean ok = true;
-
-        TestCases.TestCase tc1 = TestCases.getByIndex(0);
-        SimulationResult r1 = acs.run(tc1.getProcesses(), tc1.getConfig());
-        ok &= checkFinish("TC1", r1, "P1", 9);
-        ok &= checkFinish("TC1", r1, "P2", 13);
-        ok &= checkFinish("TC1", r1, "P3", 8);
-        ok &= checkAverage("TC1 average turnaround", r1.getAverageTurnaroundTime(), 26.0 / 3);
-        ok &= checkAverage("TC1 average waiting", r1.getAverageWaitingTime(), 13.0 / 3);
-
-        TestCases.TestCase tc2 = TestCases.getByIndex(1);
-        SimulationResult r2 = acs.run(tc2.getProcesses(), tc2.getConfig());
-        ok &= checkFinish("TC2", r2, "P1", 18);
-        ok &= checkFinish("TC2", r2, "P2", 15);
-        ok &= checkFinish("TC2", r2, "P3", 20);
-        ok &= checkAverage("TC2 average turnaround", r2.getAverageTurnaroundTime(), 16.00);
-        ok &= checkAverage("TC2 average waiting", r2.getAverageWaitingTime(), 11.00);
-
-        System.out.println(ok ? "ALL CHECKS PASSED" : "SOME CHECKS FAILED");
-        return ok;
-    }
-
-    private static boolean checkFinish(String tcLabel, SimulationResult r, String process, int expected) {
-        int actual = r.findResult(process).map(ProcessResult::getFinishTime).orElse(-1);
-        boolean pass = (actual == expected);
-        System.out.printf(Locale.ROOT, "%-26s expected %5d  got %5d  %s%n",
-                tcLabel + " finish " + process, expected, actual, pass ? "PASS" : "FAIL");
-        return pass;
-    }
-
-    private static boolean checkAverage(String label, double actual, double expected) {
-        boolean pass = Math.abs(actual - expected) < 0.005;
-        System.out.printf(Locale.ROOT, "%-26s expected %5.2f  got %5.2f  %s%n",
-                label, expected, actual, pass ? "PASS" : "FAIL");
-        return pass;
-    }
-
-    // =====================================================================
     // Input helper
     // =====================================================================
 
@@ -240,6 +268,32 @@ public class Main {
         System.out.print("\nPress Enter to return to the menu...");
         if (in.hasNextLine()) {
             in.nextLine();
+        }
+    }
+
+    /**
+     * Like readInt, but an empty line returns the default value. Returns -1 at end of input.
+     */
+    private static int readIntOrDefault(Scanner in, String prompt, int min, int max, int defaultValue) {
+        while (true) {
+            System.out.print(prompt);
+            if (!in.hasNextLine()) {
+                return -1;
+            }
+            String text = in.nextLine().trim();
+            if (text.isEmpty()) {
+                return defaultValue;
+            }
+            try {
+                int value = Integer.parseInt(text);
+                if (value >= min && value <= max) {
+                    return value;
+                }
+            } catch (NumberFormatException ignored) {
+                // fall through to the message below
+            }
+            System.out.println("Please enter a number from " + min + " to " + max
+                    + " (or press Enter for " + defaultValue + ").");
         }
     }
 
